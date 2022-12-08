@@ -1953,6 +1953,21 @@ void sdhci_set_uhs_signaling(struct sdhci_host *host, unsigned timing)
 }
 EXPORT_SYMBOL_GPL(sdhci_set_uhs_signaling);
 
+void sdhci_cfg_irq(struct sdhci_host *host, bool enable, bool sync)
+{
+	if (enable && !(host->flags & SDHCI_HOST_IRQ_STATUS)) {
+		enable_irq(host->irq);
+		host->flags |= SDHCI_HOST_IRQ_STATUS;
+	} else if (!enable && (host->flags & SDHCI_HOST_IRQ_STATUS)) {
+		if (sync)
+			disable_irq(host->irq);
+		else
+			disable_irq_nosync(host->irq);
+		host->flags &= ~SDHCI_HOST_IRQ_STATUS;
+	}
+}
+EXPORT_SYMBOL(sdhci_cfg_irq);
+
 static bool sdhci_timing_has_preset(unsigned char timing)
 {
 	switch (timing) {
@@ -1982,22 +1997,7 @@ static bool sdhci_presetable_values_change(struct sdhci_host *host, struct mmc_i
 	 */
 	return !host->preset_enabled &&
 	       (sdhci_preset_needed(host, ios->timing) || host->drv_type != ios->drv_type);
-+
-
-void sdhci_cfg_irq(struct sdhci_host *host, bool enable, bool sync)
-{
-	if (enable && !(host->flags & SDHCI_HOST_IRQ_STATUS)) {
-		enable_irq(host->irq);
-		host->flags |= SDHCI_HOST_IRQ_STATUS;
-	} else if (!enable && (host->flags & SDHCI_HOST_IRQ_STATUS)) {
-		if (sync)
-			disable_irq(host->irq);
-		else
-			disable_irq_nosync(host->irq);
-		host->flags &= ~SDHCI_HOST_IRQ_STATUS;
-	}
 }
-EXPORT_SYMBOL(sdhci_cfg_irq);
 
 static void sdhci_set_ios(struct mmc_host *mmc, struct mmc_ios *ios)
 {
@@ -2007,8 +2007,9 @@ static void sdhci_set_ios(struct mmc_host *mmc, struct mmc_ios *ios)
 	unsigned long flags;
 	u8 ctrl;
 	int ret;
-	
+
 	host->reinit_uhs = false;
+
 	if (host->flags & SDHCI_DEVICE_DEAD) {
 		if (!IS_ERR(mmc->supply.vmmc) &&
 		    ios->power_mode == MMC_POWER_OFF)
@@ -2029,6 +2030,7 @@ static void sdhci_set_ios(struct mmc_host *mmc, struct mmc_ios *ios)
 	if (ios->clock &&
 	    ((ios->clock != host->clock) || (ios->timing != host->timing))) {
 		turning_on_clk = ios->clock && !host->clock;
+
 		spin_unlock_irqrestore(&host->lock, flags);
 		host->ops->set_clock(host, ios->clock);
 		spin_lock_irqsave(&host->lock, flags);
@@ -2200,10 +2202,8 @@ static void sdhci_set_ios(struct mmc_host *mmc, struct mmc_ios *ios)
 		}
 	} else
 		sdhci_writeb(host, ctrl, SDHCI_HOST_CONTROL);
-
-	spin_unlock_irqrestore(&host->lock, flags);
-
 out:
+	spin_unlock_irqrestore(&host->lock, flags);
 	/*
 	 * Some (ENE) controllers go apeshit on some ios operation,
 	 * signalling timeout and CRC errors even on CMD0. Resetting
